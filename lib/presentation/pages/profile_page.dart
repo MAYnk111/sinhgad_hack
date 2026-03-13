@@ -150,6 +150,41 @@ class ProfilePage extends ConsumerWidget {
                       _showLanguageDialog(context, ref, currentLanguage);
                     },
                   ),
+                  const Divider(height: 1, indent: 16, endIndent: 16),
+                  SwitchListTile(
+                    title: const Text('Consultation Mode'),
+                    subtitle: const Text(
+                      'Enable supportive content for recovery and consultation',
+                    ),
+                    secondary: Icon(
+                      Icons.favorite_border,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                    value: userMeta.consultationMode,
+                    onChanged: (value) async {
+                      final previous = userMeta.consultationMode;
+                      ref
+                          .read(consultationModeOverrideProvider.notifier)
+                          .state = value;
+
+                      final updated = await ref
+                          .read(authServiceProvider)
+                          .updateUserMetadata({'consultation_mode': value});
+
+                      if (!updated) {
+                        ref
+                            .read(consultationModeOverrideProvider.notifier)
+                            .state = previous;
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Unable to update Consultation Mode.'),
+                            ),
+                          );
+                        }
+                      }
+                    },
+                  ),
                   // Translation Service Status
                   Padding(
                     padding:
