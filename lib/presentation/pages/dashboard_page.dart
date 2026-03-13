@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:maternal_infant_care/core/theme/app_theme.dart';
 import 'package:maternal_infant_care/core/services/centralized_translations.dart';
 import 'package:maternal_infant_care/presentation/viewmodels/repository_providers.dart';
+import 'package:maternal_infant_care/presentation/viewmodels/auth_provider.dart';
 import 'package:maternal_infant_care/presentation/viewmodels/user_provider.dart';
 import 'package:maternal_infant_care/core/utils/notification_service.dart';
 import 'package:maternal_infant_care/presentation/pages/feeding_tracking_page.dart';
@@ -20,6 +23,9 @@ import 'package:maternal_infant_care/presentation/pages/pregnancy_setup_page.dar
 import 'package:maternal_infant_care/presentation/viewmodels/user_meta_provider.dart';
 import 'package:maternal_infant_care/presentation/pages/weekly_stats_page.dart';
 import 'package:maternal_infant_care/presentation/pages/daily_summary_page.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class DashboardPage extends ConsumerStatefulWidget {
   const DashboardPage({super.key});
@@ -29,12 +35,111 @@ class DashboardPage extends ConsumerStatefulWidget {
 }
 
 class _DashboardPageState extends ConsumerState<DashboardPage> {
+  Timer? _sosHoldTimer;
+
+  @override
+  void dispose() {
+    _sosHoldTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<String?> _resolveEmergencyContact() async {
+    final user = ref.read(currentUserProvider);
+    final directContact = user?['phone']?.toString().trim();
+    if (directContact != null && directContact.isNotEmpty) {
+      return directContact;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final savedContact = prefs.getString('emergency_contact_phone')?.trim();
+    if (savedContact == null || savedContact.isEmpty) {
+      return null;
+    }
+    return savedContact;
+  }
+
+  Future<Position?> _getCurrentLocation() async {
+    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      return null;
+    }
+
+    var permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
+      return null;
+    }
+
+    return Geolocator.getCurrentPosition(
+      desiredAccuracy: LocationAccuracy.high,
+    );
+  }
+
+  Future<void> triggerSOS() async {
+    final emergencyContact = await _resolveEmergencyContact();
+    if (emergencyContact == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No emergency contact found for SMS.')),
+      );
+      return;
+    }
+
+    final position = await _getCurrentLocation();
+    if (position == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Unable to fetch location. Check GPS permissions.'),
+        ),
+      );
+      return;
+    }
+
+    final mapsLink =
+        'https://maps.google.com/?q=${position.latitude},${position.longitude}';
+    final message = 'Emergency! I need help. My location:\n$mapsLink';
+
+    final smsUri = Uri(
+      scheme: 'sms',
+      path: emergencyContact,
+      queryParameters: {'body': message},
+    );
+
+    final launched = await launchUrl(
+      smsUri,
+      mode: LaunchMode.externalApplication,
+    );
+
+    if (!launched && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open SMS app.')),
+      );
+    }
+  }
+
+  void _startSosHoldTimer() {
+    _sosHoldTimer?.cancel();
+    _sosHoldTimer = Timer(const Duration(seconds: 2), () {
+      triggerSOS();
+    });
+  }
+
+  void _cancelSosHoldTimer() {
+    _sosHoldTimer?.cancel();
+  }
+
   @override
   Widget build(BuildContext context) {
     final pregnancyRepo = ref.watch(pregnancyRepositoryProvider);
     final feedingRepo = ref.watch(feedingRepositoryProvider);
     final sleepRepo = ref.watch(sleepRepositoryProvider);
     final diaperRepo = ref.watch(diaperRepositoryProvider);
+    final profileType = ref.watch(userProfileProvider);
     final userMeta = ref.watch(userMetaProvider);
     final username = userMeta.username;
 
@@ -114,16 +219,55 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
           ),
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const VatsalyaAiPage()),
-        ),
-        icon: const Icon(Icons.auto_awesome),
-        label: const Text('Vatsalya AI'),
-        backgroundColor: Theme.of(context).colorScheme.primary,
-        foregroundColor: Theme.of(context).colorScheme.onPrimary,
-      ),
+      floatingActionButton: profileType == UserProfileType.pregnant
+          ? Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTapDown: (_) => _startSosHoldTimer(),
+                  onTapUp: (_) => _cancelSosHoldTimer(),
+                  onTapCancel: _cancelSosHoldTimer,
+                  child: FloatingActionButton(
+                    heroTag: 'fab_sos',
+                    backgroundColor: Colors.red,
+                    foregroundColor: Colors.white,
+                    shape: const CircleBorder(),
+                    onPressed: () {},
+                    child: const Text(
+                      'SOS',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                        fontSize: 16,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                FloatingActionButton.small(
+                  heroTag: 'fab_ai_small',
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const VatsalyaAiPage()),
+                  ),
+                  backgroundColor: Theme.of(context).colorScheme.primary,
+                  foregroundColor: Theme.of(context).colorScheme.onPrimary,
+                  child: const Icon(Icons.auto_awesome),
+                ),
+              ],
+            )
+          : FloatingActionButton.extended(
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const VatsalyaAiPage()),
+              ),
+              icon: const Icon(Icons.auto_awesome),
+              label: const Text('Vatsalya AI'),
+              backgroundColor: Theme.of(context).colorScheme.primary,
+              foregroundColor: Theme.of(context).colorScheme.onPrimary,
+            ),
     );
   }
 

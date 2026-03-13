@@ -1,3 +1,4 @@
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:intl/intl.dart';
 import 'package:maternal_infant_care/core/constants/app_constants.dart';
 import 'package:maternal_infant_care/core/utils/notification_service.dart';
@@ -16,21 +17,82 @@ class ReminderService {
     return _notificationIdCounter;
   }
 
+  static int _stableNotificationId(String key) {
+    return (key.hashCode & 0x7fffffff) % AppConstants.maxNotificationId;
+  }
+
+  static DateTime _nextDailyOccurrence(DateTime originalTime) {
+    final now = DateTime.now();
+    var reminderTime = DateTime(
+      now.year,
+      now.month,
+      now.day,
+      originalTime.hour,
+      originalTime.minute,
+    );
+
+    if (!reminderTime.isAfter(now)) {
+      reminderTime = reminderTime.add(const Duration(days: 1));
+    }
+
+    return reminderTime;
+  }
+
+  static Future<ReminderModel> scheduleReminder(
+    ReminderModel reminder, {
+    bool repeatsDaily = false,
+    bool preserveNotificationId = false,
+  }) async {
+    final notificationId = preserveNotificationId && reminder.notificationId != null
+        ? reminder.notificationId!
+        : (reminder.notificationId ?? _stableNotificationId('reminder_${reminder.id}'));
+
+    var scheduledTime = repeatsDaily
+        ? _nextDailyOccurrence(reminder.scheduledTime)
+        : reminder.scheduledTime;
+
+    final now = DateTime.now();
+    if (!scheduledTime.isAfter(now)) {
+      if (repeatsDaily) {
+        scheduledTime = _nextDailyOccurrence(scheduledTime);
+      } else {
+        while (!scheduledTime.isAfter(now)) {
+          scheduledTime = scheduledTime.add(const Duration(days: 1));
+        }
+      }
+
+      print('📱 REMINDER SERVICE: Adjusted past reminder to future time: $scheduledTime');
+    }
+
+    final updatedReminder = reminder.copyWith(
+      notificationId: notificationId,
+      scheduledTime: scheduledTime,
+    );
+
+    print('📱 REMINDER SERVICE: Scheduling reminder "${updatedReminder.title}"');
+    print('   - Notification ID: $notificationId');
+    print('   - Scheduled Time: $scheduledTime');
+    print('   - Repeats Daily: $repeatsDaily');
+    print('   - Title: ${updatedReminder.title}');
+    print('   - Description: ${updatedReminder.description}');
+
+    await NotificationService.scheduleNotification(
+      id: notificationId,
+      title: updatedReminder.title,
+      body: updatedReminder.description,
+      scheduledDate: scheduledTime,
+      matchDateTimeComponents:
+          repeatsDaily ? DateTimeComponents.time : null,
+    );
+
+    return updatedReminder;
+  }
+
   static Future<ReminderModel> schedulePregnancyReminder(
     PregnancyModel pregnancy,
     ReminderModel reminder,
   ) async {
-    final notificationId = _getNextNotificationId();
-    final updatedReminder = reminder.copyWith(notificationId: notificationId);
-
-    await NotificationService.scheduleNotification(
-      id: notificationId,
-      title: reminder.title,
-      body: reminder.description,
-      scheduledDate: reminder.scheduledTime,
-    );
-
-    return updatedReminder;
+    return scheduleReminder(reminder, preserveNotificationId: true);
   }
 
   static Future<void> scheduleVaccinationReminder(
@@ -60,7 +122,10 @@ class ReminderService {
       final reminderTime = DateTime(date.year, date.month, date.day, 9, 0);
       
       if (reminderTime.isAfter(DateTime.now())) {
-        final notificationId = _getNextNotificationId();
+        final offsetDays = vaccination.scheduledDate.difference(date).inDays;
+        final notificationId = _stableNotificationId(
+          'vaccination_${vaccination.id}_$offsetDays',
+        );
         final daysLeft = vaccination.scheduledDate.difference(reminderTime).inDays + 1;
         
         String bodyText;
@@ -77,6 +142,7 @@ class ReminderService {
           title: 'Vaccination Reminder',
           body: bodyText,
           scheduledDate: reminderTime,
+          matchDateTimeComponents: null,
         );
       }
     }
@@ -99,6 +165,7 @@ class ReminderService {
       title: 'Feeding Reminder',
       body: 'Time for feeding',
       scheduledDate: reminderTime,
+      matchDateTimeComponents: DateTimeComponents.time,
     );
   }
 
@@ -119,45 +186,12 @@ class ReminderService {
       title: 'Sleep Time Reminder',
       body: 'Time for bedtime routine',
       scheduledDate: reminderTime,
+      matchDateTimeComponents: DateTimeComponents.time,
     );
   }
 
   static Future<ReminderModel> scheduleDailyReminders(ReminderModel reminder) async {
-    final now = DateTime.now();
-    var reminderTime = DateTime(
-      now.year,
-      now.month,
-      now.day,
-      reminder.scheduledTime.hour,
-      reminder.scheduledTime.minute,
-    );
-
-    if (reminderTime.isBefore(now)) {
-      reminderTime = reminderTime.add(const Duration(days: 1));
-    }
-
-    final notificationId = _getNextNotificationId();
-    final updatedReminder = reminder.copyWith(notificationId: notificationId);
-
-    print('📱 REMINDER SERVICE: Scheduling reminder "${reminder.title}"');
-    print('   - Notification ID: $notificationId');
-    print('   - Scheduled Time: $reminderTime');
-    print('   - Title: ${reminder.title}');
-    print('   - Description: ${reminder.description}');
-
-    try {
-      await NotificationService.scheduleNotification(
-        id: notificationId,
-        title: reminder.title,
-        body: reminder.description,
-        scheduledDate: reminderTime,
-      );
-      print('✅ REMINDER SERVICE: Successfully scheduled!');
-    } catch (e) {
-      print('❌ REMINDER SERVICE ERROR: $e');
-    }
-
-    return updatedReminder;
+    return scheduleReminder(reminder, repeatsDaily: true);
   }
 
   static Future<void> cancelReminder(int? notificationId) async {

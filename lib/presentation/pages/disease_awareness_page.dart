@@ -1,5 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:maternal_infant_care/presentation/viewmodels/auth_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class DiseaseAwarenessPage extends ConsumerStatefulWidget {
   const DiseaseAwarenessPage({super.key});
@@ -24,6 +30,9 @@ class _DiseaseAwarenessPageState extends ConsumerState<DiseaseAwarenessPage> {
 
   @override
   Widget build(BuildContext context) {
+    final currentUser = ref.watch(currentUserProvider);
+    final emergencyContact = currentUser?['phone']?.toString();
+
     final allDiseases = _getCommonDiseases();
     final filteredDiseases = allDiseases.where((disease) {
       final matchesSearch = disease['name']
@@ -99,7 +108,10 @@ class _DiseaseAwarenessPageState extends ConsumerState<DiseaseAwarenessPage> {
                             context,
                             MaterialPageRoute(
                               builder: (context) =>
-                                  DiseaseDetailPage(disease: disease),
+                                  DiseaseDetailPage(
+                                disease: disease,
+                                emergencyContact: emergencyContact,
+                              ),
                             ),
                           );
                         },
@@ -576,8 +588,13 @@ class _DiseaseHubCard extends StatelessWidget {
 
 class DiseaseDetailPage extends StatelessWidget {
   final Map<String, dynamic> disease;
+  final String? emergencyContact;
 
-  const DiseaseDetailPage({super.key, required this.disease});
+  const DiseaseDetailPage({
+    super.key,
+    required this.disease,
+    this.emergencyContact,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -641,6 +658,7 @@ class DiseaseDetailPage extends StatelessWidget {
             const SizedBox(height: 32),
             _EmergencySection(
               items: (disease['seeDoctor'] as List).cast<String>(),
+              emergencyContact: emergencyContact,
             ),
             const SizedBox(height: 48),
           ],
@@ -704,10 +722,165 @@ class _DetailSection extends StatelessWidget {
   }
 }
 
-class _EmergencySection extends StatelessWidget {
+class _EmergencySection extends StatefulWidget {
   final List<String> items;
+  final String? emergencyContact;
 
-  const _EmergencySection({required this.items});
+  const _EmergencySection({
+    required this.items,
+    this.emergencyContact,
+  });
+
+  @override
+  State<_EmergencySection> createState() => _EmergencySectionState();
+}
+
+class _EmergencySectionState extends State<_EmergencySection> {
+  Timer? _holdTimer;
+  int _remainingSeconds = 3;
+  bool _isHolding = false;
+  bool _isSending = false;
+
+  @override
+  void dispose() {
+    _holdTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<String?> _resolveEmergencyContact() async {
+    final directContact = widget.emergencyContact?.trim();
+    if (directContact != null && directContact.isNotEmpty) {
+      return directContact;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final savedContact = prefs.getString('emergency_contact_phone')?.trim();
+    if (savedContact == null || savedContact.isEmpty) {
+      return null;
+    }
+    return savedContact;
+  }
+
+  Future<Position?> _getCurrentLocation() async {
+    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      return null;
+    }
+
+    var permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
+      return null;
+    }
+
+    return Geolocator.getCurrentPosition(
+      desiredAccuracy: LocationAccuracy.high,
+    );
+  }
+
+  Future<void> _triggerSos() async {
+    if (_isSending) return;
+    setState(() {
+      _isSending = true;
+    });
+
+    try {
+      final emergencyContact = await _resolveEmergencyContact();
+      if (emergencyContact == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('No emergency contact found for SMS.'),
+            ),
+          );
+        }
+        return;
+      }
+
+      final position = await _getCurrentLocation();
+      if (position == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Unable to fetch location. Check GPS permissions.'),
+            ),
+          );
+        }
+        return;
+      }
+
+      final locationLink =
+          'https://maps.google.com/?q=${position.latitude},${position.longitude}';
+      final message =
+          'Emergency! I need help. My location:\n$locationLink';
+
+      final smsUri = Uri(
+        scheme: 'sms',
+        path: emergencyContact,
+        queryParameters: <String, String>{
+          'body': message,
+        },
+      );
+
+      final launched = await launchUrl(
+        smsUri,
+        mode: LaunchMode.externalApplication,
+      );
+
+      if (!launched && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not open SMS app.'),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSending = false;
+          _isHolding = false;
+          _remainingSeconds = 3;
+        });
+      }
+    }
+  }
+
+  void _startHold() {
+    if (_isSending || _isHolding) return;
+
+    setState(() {
+      _isHolding = true;
+      _remainingSeconds = 3;
+    });
+
+    _holdTimer?.cancel();
+    _holdTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) return;
+
+      if (_remainingSeconds <= 1) {
+        timer.cancel();
+        _triggerSos();
+        return;
+      }
+
+      setState(() {
+        _remainingSeconds -= 1;
+      });
+    });
+  }
+
+  void _cancelHold() {
+    _holdTimer?.cancel();
+    if (!mounted) return;
+    setState(() {
+      _isHolding = false;
+      _remainingSeconds = 3;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -737,7 +910,7 @@ class _EmergencySection extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 16),
-          ...items.map((item) => Padding(
+          ...widget.items.map((item) => Padding(
                 padding: const EdgeInsets.only(bottom: 12.0),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -757,6 +930,71 @@ class _EmergencySection extends StatelessWidget {
                   ],
                 ),
               )),
+          const SizedBox(height: 16),
+          Center(
+            child: Column(
+              children: [
+                GestureDetector(
+                  onTapDown: (_) => _startHold(),
+                  onTapCancel: _cancelHold,
+                  onTapUp: (_) {
+                    if (_isHolding && !_isSending) {
+                      _cancelHold();
+                    }
+                  },
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 150),
+                    width: 180,
+                    height: 180,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: _isHolding
+                          ? Colors.red.shade700
+                          : Colors.red,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.red.withOpacity(0.35),
+                          blurRadius: 18,
+                          spreadRadius: 2,
+                        ),
+                      ],
+                    ),
+                    child: Center(
+                      child: _isSending
+                          ? const SizedBox(
+                              width: 32,
+                              height: 32,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 3,
+                                valueColor:
+                                    AlwaysStoppedAnimation<Color>(Colors.white),
+                              ),
+                            )
+                          : const Text(
+                              'SOS',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 42,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 2,
+                              ),
+                            ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  _isHolding
+                      ? 'Keep holding... $_remainingSeconds'
+                      : 'Hold for 3 seconds to send SOS',
+                  style: const TextStyle(
+                    color: Colors.red,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );

@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:maternal_infant_care/data/models/dashboard_card_model.dart';
 import 'package:maternal_infant_care/presentation/widgets/customizable_dashboard.dart';
 import 'package:maternal_infant_care/presentation/widgets/kick_counter_widget.dart';
@@ -9,25 +12,131 @@ import 'package:maternal_infant_care/presentation/pages/symptom_tracker_page.dar
 import 'package:maternal_infant_care/presentation/pages/daily_tips_page.dart';
 import 'package:maternal_infant_care/presentation/viewmodels/user_meta_provider.dart';
 import 'package:maternal_infant_care/presentation/widgets/start_journey_widget.dart';
+import 'package:maternal_infant_care/presentation/viewmodels/auth_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'package:maternal_infant_care/presentation/pages/daily_summary_page.dart';
 import 'package:maternal_infant_care/presentation/pages/weekly_stats_page.dart';
 
 // Reuse existing widgets where possible or create simple ones
-class PregnantDashboardPage extends ConsumerWidget {
+class PregnantDashboardPage extends ConsumerStatefulWidget {
   const PregnantDashboardPage({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<PregnantDashboardPage> createState() => _PregnantDashboardPageState();
+}
+
+class _PregnantDashboardPageState extends ConsumerState<PregnantDashboardPage> {
+  Timer? _sosHoldTimer;
+
+  @override
+  void dispose() {
+    _sosHoldTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<String?> _resolveEmergencyContact() async {
+    final user = ref.read(currentUserProvider);
+    final directContact = user?['phone']?.toString().trim();
+    if (directContact != null && directContact.isNotEmpty) {
+      return directContact;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final savedContact = prefs.getString('emergency_contact_phone')?.trim();
+    if (savedContact == null || savedContact.isEmpty) {
+      return null;
+    }
+    return savedContact;
+  }
+
+  Future<Position?> _getCurrentLocation() async {
+    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      return null;
+    }
+
+    var permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
+      return null;
+    }
+
+    return Geolocator.getCurrentPosition(
+      desiredAccuracy: LocationAccuracy.high,
+    );
+  }
+
+  Future<void> triggerSOS() async {
+    final emergencyContact = await _resolveEmergencyContact();
+    if (emergencyContact == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No emergency contact found for SMS.')),
+      );
+      return;
+    }
+
+    final position = await _getCurrentLocation();
+    if (position == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Unable to fetch location. Check GPS permissions.'),
+        ),
+      );
+      return;
+    }
+
+    final mapsLink =
+        'https://maps.google.com/?q=${position.latitude},${position.longitude}';
+    final message = 'Emergency! I need help. My location:\n$mapsLink';
+
+    final smsUri = Uri(
+      scheme: 'sms',
+      path: emergencyContact,
+      queryParameters: {'body': message},
+    );
+
+    final launched = await launchUrl(
+      smsUri,
+      mode: LaunchMode.externalApplication,
+    );
+
+    if (!launched && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open SMS app.')),
+      );
+    }
+  }
+
+  void _startSosHoldTimer() {
+    _sosHoldTimer?.cancel();
+    _sosHoldTimer = Timer(const Duration(seconds: 2), () {
+      triggerSOS();
+    });
+  }
+
+  void _cancelSosHoldTimer() {
+    _sosHoldTimer?.cancel();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return CustomizableDashboard(
-      header: _buildHeader(context, ref),
+      header: _buildHeader(context),
       cardBuilder: (context, card) {
         return _buildCardContent(context, card);
       },
     );
   }
 
-  Widget _buildHeader(BuildContext context, WidgetRef ref) {
+  Widget _buildHeader(BuildContext context) {
     final userMeta = ref.watch(userMetaProvider);
     final username = userMeta.username;
     final displayName = (username != null && username.isNotEmpty) ? username : 'Janani'; // "Mother" in Sanskrit

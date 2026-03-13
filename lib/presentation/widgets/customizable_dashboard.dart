@@ -8,11 +8,13 @@ import 'package:maternal_infant_care/data/repositories/dashboard_preferences_rep
 class CustomizableDashboard extends ConsumerStatefulWidget {
   final Widget Function(BuildContext context, DashboardCardModel card) cardBuilder;
   final Widget header;
+  final Widget? floatingActionButton;
 
   const CustomizableDashboard({
     super.key,
     required this.cardBuilder,
     required this.header,
+    this.floatingActionButton,
   });
 
   @override
@@ -51,7 +53,7 @@ class _CustomizableDashboardState extends ConsumerState<CustomizableDashboard> {
                   label: const Text('Done'),
                   heroTag: 'fab_dashboard_edit',
                 )
-              : null,
+              : widget.floatingActionButton,
           body: ReorderableListView(
             header: Column(
               children: [

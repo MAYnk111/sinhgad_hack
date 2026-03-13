@@ -1,11 +1,19 @@
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/timezone.dart' as tz;
-import 'package:timezone/data/latest_all.dart' as tz_data;
+import 'package:timezone/data/latest.dart' as tz_data;
 
 class NotificationService {
   static final FlutterLocalNotificationsPlugin _notifications = FlutterLocalNotificationsPlugin();
+  static bool _initialized = false;
+  static const String _defaultReminderChannelId = 'reminder_channel';
+  static const String _defaultReminderChannelName = 'Reminder Notifications';
 
   static Future<void> initialize() async {
+    if (_initialized) {
+      print('🔔 NOTIFICATION DEBUG: Initialization already completed, skipping');
+      return;
+    }
+
     print('🔔 NOTIFICATION DEBUG: Starting Initialization...');
     try {
       // 1. Initialize Timezones
@@ -42,9 +50,9 @@ class NotificationService {
 
       // 4. Create Channel (Android Only)
       const androidChannel = AndroidNotificationChannel(
-        'high_importance_channel',
-        'Urgent Alerts',
-        description: 'This channel is used for important notifications.',
+        _defaultReminderChannelId,
+        _defaultReminderChannelName,
+        description: 'This channel is used for reminder notifications.',
         importance: Importance.max,
         playSound: true,
         enableVibration: true,
@@ -69,6 +77,8 @@ class NotificationService {
       } else {
         print('🔔 NOTIFICATION DEBUG: Android Plugin was NULL (expected on non-Android platforms)');
       }
+
+      _initialized = true;
       
       print('🔔 NOTIFICATION DEBUG: Initialization Finished Successfully');
     } catch (e, stack) {
@@ -126,18 +136,29 @@ class NotificationService {
     required String body,
     required DateTime scheduledDate,
     String? channelId,
+    DateTimeComponents? matchDateTimeComponents,
   }) async {
     print('🔔 NOTIFICATION DEBUG: scheduleNotification called. ID: $id, Title: $title, Date: $scheduledDate');
     try {
-      var adjustedDate = scheduledDate;
-      if (adjustedDate.isBefore(DateTime.now())) {
-        print('🔔 NOTIFICATION DEBUG: Date is in past, shifting 5 seconds forward');
-        adjustedDate = DateTime.now().add(const Duration(seconds: 5));
+      if (!_initialized) {
+        await initialize();
+      }
+
+      final now = DateTime.now();
+      var effectiveDate = scheduledDate;
+
+      if (!effectiveDate.isAfter(now)) {
+        effectiveDate = now.add(const Duration(seconds: 2));
+        print(
+          '🔔 NOTIFICATION DEBUG: Adjusted past schedule to future time: $effectiveDate',
+        );
       }
 
       // Convert to TZDateTime
-      final tzDateTime = tz.TZDateTime.from(adjustedDate, tz.local);
+      final tzDateTime = tz.TZDateTime.from(effectiveDate, tz.local);
       
+      print('Scheduling reminder for $tzDateTime');
+      print('Reminder scheduled at: $tzDateTime');
       print('🔔 NOTIFICATION DEBUG: Scheduling for $tzDateTime (Local timezone)');
 
       await _notifications.zonedSchedule(
@@ -147,8 +168,8 @@ class NotificationService {
         tzDateTime,
         NotificationDetails(
           android: AndroidNotificationDetails(
-            channelId ?? 'high_importance_channel',
-            'Urgent Alerts',
+            channelId ?? _defaultReminderChannelId,
+            _defaultReminderChannelName,
             channelDescription: 'Scheduled reminders and notifications',
             importance: Importance.max,
             priority: Priority.high,
@@ -168,7 +189,7 @@ class NotificationService {
         ),
         androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
         uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
-        matchDateTimeComponents: DateTimeComponents.time, // Repeat daily if same time
+        matchDateTimeComponents: matchDateTimeComponents,
       );
       print('🔔 NOTIFICATION DEBUG: ✅ Notification scheduled successfully! ID: $id');
       
@@ -180,6 +201,19 @@ class NotificationService {
       print('❌ NOTIFICATION ERROR during schedule: $e');
       print('❌ STACK TRACE: $stack');
     }
+  }
+
+  static Future<void> scheduleDebugReminderIn10Seconds() async {
+    final fireAt = DateTime.now().add(const Duration(seconds: 10));
+    print('🔔 NOTIFICATION DEBUG: Scheduling 10-second test reminder for $fireAt');
+
+    await cancelNotification(909001);
+    await scheduleNotification(
+      id: 909001,
+      title: 'Reminder Test',
+      body: 'This is a 10-second scheduled reminder test.',
+      scheduledDate: fireAt,
+    );
   }
 
   static Future<void> showNotification({

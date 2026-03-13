@@ -10,6 +10,7 @@ import 'package:maternal_infant_care/presentation/pages/nutrition_guidance_page.
 import 'package:maternal_infant_care/presentation/pages/daily_tips_page.dart';
 import 'package:maternal_infant_care/presentation/pages/hospital_bag_page.dart';
 import 'package:maternal_infant_care/presentation/pages/garbha_sanskar_page.dart';
+import 'package:maternal_infant_care/presentation/pages/trimester_videos_page.dart';
 
 class ResourcesPage extends ConsumerStatefulWidget {
   const ResourcesPage({super.key});
@@ -246,6 +247,15 @@ class _ResourcesPageState extends ConsumerState<ResourcesPage> {
                     context,
                     MaterialPageRoute(
                         builder: (_) => const GarbhaSanskarPage())),
+              ),
+              _CategoryCard(
+                title: 'Pregnancy Videos',
+                icon: Icons.play_circle_fill_rounded,
+                color: const Color(0xFF8B5E3C),
+                onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const TrimesterVideosPage())),
               ),
               _CategoryCard(
                 title: 'Medical',

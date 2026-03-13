@@ -377,7 +377,10 @@ class _RemindersPageState extends ConsumerState<RemindersPage> {
       sourceType: 'story',
     );
 
-    final updatedReminder = await ReminderService.scheduleDailyReminders(reminder);
+    final updatedReminder = await ReminderService.scheduleReminder(
+      reminder,
+      repeatsDaily: true,
+    );
     await repo.saveReminder(updatedReminder);
     ref.invalidate(reminderRepositoryProvider);
 
@@ -408,7 +411,7 @@ class _RemindersPageState extends ConsumerState<RemindersPage> {
     dynamic repo,
     ReminderModel reminder,
   ) async {
-    final scheduled = await ReminderService.scheduleDailyReminders(reminder);
+    final scheduled = await ReminderService.scheduleReminder(reminder);
     await repo.saveReminder(scheduled);
     ref.invalidate(reminderRepositoryProvider);
     if (context.mounted) {
@@ -576,8 +579,8 @@ class _RemindersPageState extends ConsumerState<RemindersPage> {
                     type: selectedType,
                   );
 
-                  final updatedReminder =
-                      await ReminderService.scheduleDailyReminders(reminder);
+                    final updatedReminder =
+                      await ReminderService.scheduleReminder(reminder);
                   await repo.saveReminder(updatedReminder);
 
                   if (mounted) {

@@ -6,9 +6,12 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:timezone/data/latest.dart' as tz_data;
+import 'package:timezone/timezone.dart' as tz;
 import 'package:maternal_infant_care/core/constants/env.dart';
 import 'package:maternal_infant_care/core/theme/app_theme.dart';
 import 'package:maternal_infant_care/core/utils/notification_service.dart';
+import 'package:maternal_infant_care/core/utils/reminder_bootstrap_service.dart';
 import 'package:maternal_infant_care/data/local/hive_adapters.dart';
 import 'package:maternal_infant_care/presentation/pages/splash_page.dart';
 import 'package:maternal_infant_care/presentation/viewmodels/language_provider.dart';
@@ -45,8 +48,18 @@ void main() async {
     await Hive.initFlutter();
     await HiveAdapters.registerAdapters();
 
+    tz_data.initializeTimeZones();
+    try {
+      tz.setLocalLocation(tz.getLocation('Asia/Kolkata'));
+      print('Main: timezone initialized to Asia/Kolkata');
+    } catch (e) {
+      tz.setLocalLocation(tz.getLocation('UTC'));
+      print('Main: timezone fallback to UTC. Error: $e');
+    }
+
     try {
       await NotificationService.initialize();
+      await ReminderBootstrapService.restorePendingSchedules();
     } catch (e) {
       print('Notification service initialization failed: $e');
       // Continue without notifications
